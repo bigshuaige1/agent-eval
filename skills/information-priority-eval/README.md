@@ -8,7 +8,7 @@ Copy this folder to `~/.codex/skills/information-priority-eval/`. To use the sam
 
 The following short rule can be appended to the user's global `AGENTS.md` or a project's `AGENTS.md`. For Claude, put the same rule in `CLAUDE.md` and replace the skill reference with the installed path if the host does not expose `$information-priority-eval`:
 
-> When the user says an answer missed a key point, corrects a material omission affecting the answer or decision, or asks to evaluate answer priorities, use `$information-priority-eval`. Capture one short local case with the user's stated goal, specific omission and consequence. Do not record raw conversation text or treat the assistant's own inferred checklist as a human label. Publish only after the contributor confirms a specific preview or personally opts into ongoing auto-upload for this store and repository.
+> When the user says an answer missed a key point, corrects a material omission affecting the answer or decision, or asks to evaluate answer priorities, use `$information-priority-eval`. Capture one short local case with the user's stated goal, specific omission and consequence. Keep raw conversation text out of publishable cases and do not treat the assistant's own inferred checklist as a human label. Publish only after the contributor confirms a specific preview or personally opts into ongoing auto-upload for this store and repository.
 
 This rule is intentionally scoped to feedback and evaluation; adding it to every answer would add token cost and noisy cases.
 
@@ -26,6 +26,16 @@ python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py report \
 ```
 
 For a complete independent review, generate a JSON skeleton with `template`, fill every relevant requirement from the original request and source, then use `add --input case.json --store STORE`. A single correction is a partial review and does not enter the critical omission-rate denominator.
+
+To find more evidence already available on the local machine, run:
+
+```bash
+python3 ~/.codex/skills/information-priority-eval/scripts/discover.py \
+  --store ./results/information-priority-eval \
+  --path ./logs
+```
+
+The discoverer reads Codex user history, Memory Markdown, and session records, plus any extra files or directories passed with `--path`. It writes `discovery.jsonl` with matched corrections and `user_messages.jsonl` with every deduplicated user message. Records include the preceding user request and assistant reply when available, and exact source locations. It uses no model calls and has no upload path. The default scan has no byte or candidate limit; use `--max-mib N` and `--max-candidates N` if needed. A large session archive should be scanned on a suitable worker. Confirm a genuine human correction before making a short case. Memory summaries and task logs are background context, not independent human labels. Discovery files can contain private conversation text and should stay local.
 
 ## Share with the maintainer
 

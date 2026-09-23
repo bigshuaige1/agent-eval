@@ -12,6 +12,8 @@ cp -a agent-eval/skills/information-priority-eval ~/.codex/skills/
 
 Restart the agent session after installation. The [skill instructions](skills/information-priority-eval/SKILL.md) explain when to collect a case; the [usage guide](skills/information-priority-eval/README.md) includes a short optional rule for `AGENTS.md` or `CLAUDE.md`.
 
+To inspect existing local Codex history, Memory, and sessions for possible missed priorities, run `python3 ~/.codex/skills/information-priority-eval/scripts/discover.py --store ./results/information-priority-eval`. Add `--path DIR` for other local records. The output stays local and includes conversation context; review it before writing a short case. Large archives should be scanned on a suitable worker.
+
 ## Share cases
 
 The default destination is this repository's public Issues. Authenticate once with `gh auth login`, or provide `GH_TOKEN`/`GITHUB_TOKEN` through your usual secure environment setup. Run the collector in an interactive terminal:
