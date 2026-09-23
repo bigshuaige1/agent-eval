@@ -1,0 +1,25 @@
+---
+name: information-priority-eval
+description: Collect and evaluate human-priority omissions in AI answers. Use when a user says an answer missed the point, corrects a key omission, asks for answer-quality evaluation, or wants to compare answer versions against independently specified requirements. Do not invoke for ordinary editing or generic summaries.
+---
+
+# Information priority evaluation
+
+Record a compact, source-grounded case when the user identifies a concrete missed requirement or requests this evaluation. Use `scripts/casebook.py capture` for one correction, or `add` for an independently reviewed set of requirements. The script stores local JSON; it makes no model calls.
+
+Only `user_feedback` and `independent_review` labels count in the report. For independent review, derive explicit questions, conclusion-changing conditions, and key unknowns from the original request/source before judging the answer. An agent may suggest a requirement, but record it as `agent_hypothesis` until a person independently verifies it. Never infer that silence means coverage. A `complete` review means the reviewer checked the original request/source for omissions beyond the model's candidates; otherwise use `partial`.
+
+Keep the case short: task goal, one observable finding, its consequence, answer or artifact reference, and failure stage (`goal`, `retrieval`, `selection`, `generation`, `presentation`, or `unknown`). Do not store raw conversations, credentials, or source documents. Put any private local path only in `artifact`; publishing excludes that field. Prefer a local project `results/information-priority-eval/` store; for cross-project cases use the workspace `results/information-priority-eval/`.
+
+Examples:
+
+```bash
+python3 scripts/casebook.py capture --store results/information-priority-eval \
+  --goal 'Decide whether deployment is safe' --finding 'The answer omitted the unsupported device' \
+  --impact 'Reader may approve an incompatible deployment' --stage selection --importance critical
+python3 scripts/casebook.py report --store results/information-priority-eval
+```
+
+For a full reviewed case, run `python3 scripts/casebook.py template`, fill the JSON, then `add --input FILE --store STORE`. `publish --id CASE_ID` reviews one case; `sync` reviews a pending batch; `watch --every-minutes N` checks periodically while its interactive terminal stays open. The default destination is `bigshuaige1/agent-eval`; `--repo OWNER/REPO` overrides it. Each command displays the exact GitHub Issue body and uploads only when the contributor presses Enter. Noninteractive runs never upload. Publishing uses an existing GitHub CLI login or `GH_TOKEN`/`GITHUB_TOKEN` with Issue creation permission; it never writes the token to a file.
+
+Report observed case counts separately from omission rates. Compute a critical omission rate only on independently labelled `complete` reviews, and say the result applies to that reviewed sample. Do not claim skill-trigger performance without observable trigger evidence.
