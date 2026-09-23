@@ -18,7 +18,7 @@ The default destination is this repository's public Issues. Authenticate once wi
 
 ```bash
 python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py watch \
-  --store ./results/information-priority-eval --every-minutes 1440
+  --store ./results/information-priority-eval
 ```
 
-It checks for pending cases immediately and then every 24 hours while the terminal remains open. It previews each batch and creates Issues only after you press Enter; typing anything else skips the batch. No interactive terminal means no upload. Review the preview for private information: Issues in this public repository are visible to everyone. The local artifact reference and full conversation are never included in the Issue body.
+It checks for pending cases immediately and then every hour while running. At the first pending batch, press Enter to approve that batch, type `ALWAYS` to authorize automatic uploads of future cases from this local store, or type anything else to skip. Automatic mode also works without a terminal; revoke it with `python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py policy --store ./results/information-priority-eval --manual`. A foreground `watch` stops when its terminal closes, so unattended hourly checks need a separately scheduled process. Issues in this public repository are visible to everyone: auto mode does not review future summaries for private information. The local artifact reference and full conversation are excluded from the Issue body.

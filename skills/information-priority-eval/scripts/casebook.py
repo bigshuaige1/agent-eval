@@ -99,6 +99,38 @@ def claim_path(store, repo, case_id):
     return receipt_path(store, repo, case_id).with_suffix(".claim")
 
 
+def policy_path(store, repo):
+    namespace = hashlib.sha256(repo.lower().encode()).hexdigest()[:16]
+    return store / "policies" / (namespace + ".json")
+
+
+def policy_mode(store, repo):
+    path = policy_path(store, repo)
+    if not path.exists():
+        return "manual"
+    policy = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(policy, dict) or policy.get("repo") != repo or policy.get("mode") not in {"manual", "auto"}:
+        raise ValueError("invalid upload policy; refusing to upload")
+    return policy["mode"]
+
+
+def set_policy(store, repo, mode):
+    if mode not in {"manual", "auto"}:
+        raise ValueError("invalid upload policy mode")
+    path = policy_path(store, repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent,
+                                     delete=False) as output:
+        json.dump({"repo": repo, "mode": mode,
+                   "updated_at": datetime.now(timezone.utc).isoformat()}, output)
+        output.write("\n")
+        temporary = Path(output.name)
+    try:
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def pending_cases(store, repo):
     sent = receipt_path(store, repo, "unused").parent
     return [load_case(store, path.stem) for path in sorted((store / "cases").glob("*.json"))
@@ -165,20 +197,33 @@ def review_and_sync(store, repo, selected=None, max_batch=10):
         if claims:
             print(f"Unresolved submissions: {len(claims)}. Inspect GitHub, then use resolve.")
         return
-    for case in cases:
-        print(issue_body(case))
-    print(f"Pending: {len(cases)}. These summaries will become GitHub Issues in {repo}.")
-    if not sys.stdin.isatty():
-        print("No interactive terminal; nothing uploaded.")
-        return
+    auto = policy_mode(store, repo) == "auto"
+    if auto:
+        print(f"Auto-upload enabled for this store and {repo}; pending: {len(cases)}.")
+    else:
+        for case in cases:
+            print(issue_body(case))
+        print(f"Pending: {len(cases)}. These summaries will become GitHub Issues in {repo}.")
+        if not sys.stdin.isatty():
+            print("No interactive terminal and no auto-upload consent; nothing uploaded.")
+            return
     token = github_token()
     if not token:
         print("No GitHub login found; use GH_TOKEN/GITHUB_TOKEN or gh auth login.")
         return
-    if input("Press Enter to upload this batch, or type anything to skip: ") != "":
-        print("Skipped; cases remain pending.")
-        return
+    if not auto:
+        choice = input(f"Enter = upload once; ALWAYS = auto-upload future cases to {repo} without review; other text = skip: ")
+        if choice == "ALWAYS":
+            set_policy(store, repo, "auto")
+            auto = True
+            print("Auto-upload enabled for this store and repository. Use policy --manual to revoke.")
+        elif choice != "":
+            print("Skipped; cases remain pending.")
+            return
     for case in cases:
+        if auto and policy_mode(store, repo) != "auto":
+            print("Auto-upload revoked; remaining cases are pending.")
+            break
         submit_case(store, repo, case, token=token)
 
 
@@ -222,7 +267,7 @@ def main():
     add.add_argument("--input", type=Path, required=True)
     summary = sub.add_parser("report")
     summary.add_argument("--store", type=Path, required=True)
-    for name in ("publish", "sync", "watch", "resolve"):
+    for name in ("publish", "sync", "watch", "resolve", "policy"):
         command = sub.add_parser(name)
         command.add_argument("--store", type=Path, required=True)
         command.add_argument("--repo", default=DEFAULT_REPO,
@@ -232,11 +277,15 @@ def main():
         if name in {"sync", "watch"}:
             command.add_argument("--max-batch", type=int, default=10)
         if name == "watch":
-            command.add_argument("--every-minutes", type=int, default=1440)
+            command.add_argument("--every-minutes", type=int, default=60,
+                                 help="check interval in minutes (default: 60)")
         if name == "resolve":
             outcome = command.add_mutually_exclusive_group(required=True)
             outcome.add_argument("--issue-url")
             outcome.add_argument("--not-created", action="store_true")
+        if name == "policy":
+            command.add_argument("--manual", action="store_true",
+                                 help="revoke auto-upload for this store and repository")
     args = parser.parse_args()
 
     if args.command == "template":
@@ -257,11 +306,16 @@ def main():
         print(save(args.store, json.loads(args.input.read_text(encoding="utf-8"))))
     elif args.command == "report":
         report(args.store)
-    elif args.command in {"publish", "sync", "watch", "resolve"}:
+    elif args.command in {"publish", "sync", "watch", "resolve", "policy"}:
         if not REPO_PATTERN.fullmatch(args.repo) or ".." in args.repo:
             raise ValueError("repo must be OWNER/REPO")
         if args.command in {"publish", "resolve"} and not ID_PATTERN.fullmatch(args.id):
             raise ValueError("invalid case id")
+        if args.command == "policy":
+            if args.manual:
+                set_policy(args.store, args.repo, "manual")
+            print(f"Upload policy for {args.repo}: {policy_mode(args.store, args.repo)}")
+            return
         if args.command == "resolve":
             claim = claim_path(args.store, args.repo, args.id)
             if not claim.exists():
@@ -286,9 +340,9 @@ def main():
         elif args.command == "sync":
             review_and_sync(args.store, args.repo, max_batch=args.max_batch)
         else:
-            if not sys.stdin.isatty():
-                raise ValueError("watch requires an interactive terminal")
-            print(f"Watching every {args.every_minutes} minutes. Leave this terminal open; Ctrl-C stops it.")
+            if not sys.stdin.isatty() and policy_mode(args.store, args.repo) != "auto":
+                raise ValueError("watch requires a terminal until auto-upload is enabled")
+            print(f"Watching every {args.every_minutes} minutes; Ctrl-C stops it.")
             while True:
                 review_and_sync(args.store, args.repo, max_batch=args.max_batch)
                 time.sleep(args.every_minutes * 60)

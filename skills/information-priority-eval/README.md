@@ -8,7 +8,7 @@ Copy this folder to `~/.codex/skills/information-priority-eval/`. To use the sam
 
 The following short rule can be appended to the user's global `AGENTS.md` or a project's `AGENTS.md`. For Claude, put the same rule in `CLAUDE.md` and replace the skill reference with the installed path if the host does not expose `$information-priority-eval`:
 
-> When the user says an answer missed a key point, corrects a material omission affecting the answer or decision, or asks to evaluate answer priorities, use `$information-priority-eval`. Capture one short local case with the user's stated goal, specific omission and consequence. Do not record raw conversation text or treat the assistant's own inferred checklist as a human label. Never publish a case without the contributor's explicit approval of the exact redacted Issue body.
+> When the user says an answer missed a key point, corrects a material omission affecting the answer or decision, or asks to evaluate answer priorities, use `$information-priority-eval`. Capture one short local case with the user's stated goal, specific omission and consequence. Do not record raw conversation text or treat the assistant's own inferred checklist as a human label. Publish only after the contributor confirms a specific preview or personally opts into ongoing auto-upload for this store and repository.
 
 This rule is intentionally scoped to feedback and evaluation; adding it to every answer would add token cost and noisy cases.
 
@@ -35,10 +35,19 @@ The default receiving repository is [`bigshuaige1/agent-eval`](https://github.co
 python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py publish \
   --store ./results/information-priority-eval --id CASE_ID
 python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py watch \
-  --store ./results/information-priority-eval --every-minutes 1440
+  --store ./results/information-priority-eval
 ```
 
-Authenticate once with GitHub CLI (`gh auth login`) if it is installed, or set `GH_TOKEN`/`GITHUB_TOKEN` in the environment by your usual secure method; do not paste a token into chat, a command history entry, or a case file. `watch` checks immediately and then at the chosen interval while its terminal remains open. It shows up to 10 unsent summaries and waits: Enter uploads that batch; any other text skips it. Successful uploads get local receipts, so the next check shows only pending cases. Closing the terminal stops the schedule. `publish` handles one case, and `sync` handles one batch without looping. Noninteractive runs never upload. The Issue contains the previewed summary, not the local artifact reference or full conversation.
+Authenticate once with GitHub CLI (`gh auth login`) if it is installed, or set `GH_TOKEN`/`GITHUB_TOKEN` in the environment by your usual secure method; do not paste a token into chat, a command history entry, or a case file. `watch` checks immediately and then every hour by default while the process runs. On its first pending batch, Enter uploads only that batch, typing `ALWAYS` enables automatic upload of future cases from this local store to this public repository, and any other input skips. Ongoing consent is saved locally; future checks do not wait for Enter or show a per-case preview. This includes noninteractive `sync` or `watch` runs. Successful uploads get local receipts, so later checks only send pending cases. Closing the terminal stops a foreground `watch`; a separately scheduled process is needed for unattended hourly checks. The Issue contains the case summary, not the local artifact reference or full conversation. Auto mode can publish private information if it appears in a new summary, so enable it only for a store whose cases are safe to share publicly.
+
+Check or revoke the setting at any time:
+
+```bash
+python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py policy \
+  --store ./results/information-priority-eval
+python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py policy \
+  --store ./results/information-priority-eval --manual
+```
 
 An atomic local claim prevents two senders using the same store from posting the same case concurrently. If an upload result is uncertain, that case stays blocked instead of retrying automatically. Check the repository for the case ID, then run `resolve --store STORE --id CASE_ID --issue-url https://github.com/bigshuaige1/agent-eval/issues/NUMBER` if the Issue exists, or use `--not-created` only after verifying it does not. Separate local stores cannot coordinate; contributors should avoid submitting the same case twice. `--repo OWNER/REPO` overrides the default destination when needed.
 
