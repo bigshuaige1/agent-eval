@@ -1,46 +1,33 @@
-# PjLab intake with an external HTTPS address
+# Cloudflare HTTPS intake
 
-The public Ingress accepts `POST /v1/cases` over HTTPS. Its ClusterIP Service sends the request to `server.py`, which checks a contributor upload token, limits each token to 10 submissions per minute, validates an 8 KiB case summary, and creates a private GitHub Issue in `bigshuaige1/agent-eval-data`. It returns an opaque receipt. Discovery archives and local artifact paths are never submitted.
+`worker.mjs` receives short case summaries at `POST /v1/cases`, checks a contributor token, limits each token to 10 submissions per minute, and creates an Issue in the private `bigshuaige1/agent-eval-data` repository. It returns an opaque receipt. Discovery archives and local artifact paths are excluded by the client and rejected by the receiver.
 
-## Values required from PjLab
+The Worker is deployed as `agent-eval-intake` on `bigshuaige1-agent-eval.workers.dev`. Its route is enabled, but uploads remain unavailable until both production secrets below are configured and an external request test succeeds. A `GET /healthz` response only checks that the script runs; it does not prove that GitHub delivery works. PjLab's current proxy cannot complete TLS to this `workers.dev` hostname, so test from a contributor network before distributing the URL.
 
-- A namespace where a Deployment, Service, Ingress, and Secret may be created.
-- An external DNS name that resolves to an Ingress controller reachable by contributors outside the cluster. A `.pjlab.org.cn` name is not automatically public; verify access from outside PjLab.
-- A TLS Secret in that namespace whose certificate covers the DNS name, plus the Ingress class if no default class exists. Configure the controller to reject plaintext HTTP or redirect it to HTTPS; a TLS rule alone does not guarantee this.
-- A registry image address the cluster can pull. The Dockerfile accepts `--build-arg PYTHON_IMAGE=...` if the default Python base image is unavailable.
+## Production secrets
 
-The manifest uses the HTTPS proxy observed in the current PjLab environment for outbound GitHub API calls. Verify that `http://httpproxy-headless.kubebrain.svc.pjlab.local:3128` works in the deployment namespace; change the rendered manifest if the cluster uses a different proxy. The intake still sends case summaries to GitHub, so they do leave PjLab.
+- `GITHUB_TOKEN`: a **fine-grained** GitHub token restricted to `bigshuaige1/agent-eval-data` with `Issues: write`. Do not bind a broad classic `repo` token to the Worker.
+- `UPLOAD_TOKEN_HASHES`: one SHA-256 hex digest per contributor token, separated by newlines or spaces. Give each contributor a distinct random token of at least 32 characters through a secure channel. Keep raw tokens in their secret managers, not in this repository.
 
-## Credentials
-
-Create a fine-grained GitHub token scoped only to `bigshuaige1/agent-eval-data` with **Issues: write**. Use a secret manager to create a Kubernetes Secret named `agent-eval-intake` with keys `github-token` and `upload-token-hashes`. Never put token values in the manifest, image, shell command line, repository, chat, or logs.
-
-Issue each contributor a separate high-entropy upload token through a secure channel. Put the SHA-256 hex digest of each token on its own line in `upload-token-hashes`; keep the raw token only in the contributor's secret manager. The following command prompts without putting the token in shell history and prints only its digest:
+Set these as Cloudflare Worker Secrets in the dashboard or with `wrangler secret put`. Do not put them in `wrangler.toml`, code, Git, shell history, or task logs. To calculate a digest without echoing the token:
 
 ```bash
 python3 -c 'import getpass,hashlib; print(hashlib.sha256(getpass.getpass("Upload token: ").encode()).hexdigest())'
 ```
 
-Contributors configure `AGENT_EVAL_ENDPOINT=https://YOUR-HOST/v1/cases` and `AGENT_EVAL_UPLOAD_TOKEN` in their environment. They need no access to the private GitHub repository. To revoke one contributor, remove that digest from the Secret and restart the Deployment. The client keeps Enter or `ALWAYS` consent scoped to the endpoint and local store.
+The API token used to deploy this Worker was pasted into a chat and should be rotated before further production use. R2 access keys are not used by this design and should also be rotated because they were exposed in the same message.
 
-## Build and deploy
+## Update and verify
 
-Use an approved CPU worker to build and push the image, then render a manifest containing no secrets:
+The source of truth is `worker.mjs` and `wrangler.toml`. From `intake/`, deploy with Wrangler under an account identity allowed to edit this Worker. `wrangler.toml` declares the rate limiter binding. The Worker checks that both secrets and the binding exist before accepting a case.
 
-```bash
-docker build -t REGISTRY/agent-eval-intake:TAG -f intake/Dockerfile intake
-docker push REGISTRY/agent-eval-intake:TAG
-python3 intake/render.py --host YOUR-HOST --image REGISTRY/agent-eval-intake:TAG \
-  --tls-secret YOUR-TLS-SECRET --output results/20260924_intake-deploy/app.yaml
-```
+After setting secrets, test from a network outside PjLab:
 
-Add `--ingress-class CLASS` to the renderer if your cluster has no default Ingress class. Review the rendered host, image, TLS Secret, proxy, namespace, and resource limits. Have a PjLab operator or the authorized user apply it in the selected namespace:
+1. `GET https://agent-eval-intake.bigshuaige1-agent-eval.workers.dev/healthz` returns HTTP 200.
+2. An unauthenticated `POST /v1/cases` returns HTTP 401.
+3. A synthetic case sent with a valid contributor token returns HTTP 201 and a receipt; confirm the private Issue was created. Do not use a real conversation for this test.
+4. Test that an extra `artifact` field and an oversized body are rejected, and that the case body in the private Issue contains only the intended short summary.
 
-```bash
-kubectl -n NAMESPACE apply -f results/20260924_intake-deploy/app.yaml
-kubectl -n NAMESPACE rollout status deployment/agent-eval-intake
-```
+Then contributors set `AGENT_EVAL_ENDPOINT=https://agent-eval-intake.bigshuaige1-agent-eval.workers.dev/v1/cases` and `AGENT_EVAL_UPLOAD_TOKEN` through their environment or secret manager. The local casebook's Enter and `ALWAYS` choices still control upload consent. If a request times out, reconcile by case ID before retrying because the Issue might already exist.
 
-From a machine outside the cluster, an unauthenticated POST to `https://YOUR-HOST/v1/cases` should return HTTP 401. Verify that plaintext HTTP cannot accept a case. Then use a synthetic case with a contributor token to verify that a private Issue is created and its receipt is stored locally. Check DNS, certificate validity, Ingress routing, and GitHub proxy egress before sending real cases. A request timeout may still mean the Issue was created; reconcile by case ID before retrying.
-
-This is a small single-process receiver. Its rate limit is in memory and assumes one replica. Restrict who receives upload tokens, review private Issues as untrusted submissions, and use your organization's HTTPS and data-handling rules for external contributors.
+Only case summaries are sent to Cloudflare and GitHub; they do leave PjLab. Do not add full local discovery archives or raw user-message files to this endpoint.
