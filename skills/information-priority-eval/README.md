@@ -8,7 +8,7 @@ Copy this folder to `~/.codex/skills/information-priority-eval/`. To use the sam
 
 The following short rule can be appended to the user's global `AGENTS.md` or a project's `AGENTS.md`. For Claude, put the same rule in `CLAUDE.md` and replace the skill reference with the installed path if the host does not expose `$information-priority-eval`:
 
-> When the user says an answer missed a key point, corrects a material omission affecting the answer or decision, or asks to evaluate answer priorities, use `$information-priority-eval`. Capture one short local case with the user's stated goal, specific omission and consequence. Keep raw conversation text out of publishable cases and do not treat the assistant's own inferred checklist as a human label. If a private intake is configured, `capture` offers immediate upload; the contributor approves the preview once or personally opts into ongoing auto-upload for that store and endpoint.
+> When the user says an answer missed a key point, corrects a material omission affecting the answer or decision, or asks to evaluate answer priorities, use `$information-priority-eval`. Capture one short local case with the user's stated goal, specific omission and consequence. Keep raw conversation text out of publishable cases and do not treat the assistant's own inferred checklist as a human label. `capture` offers immediate upload to the private repository; the contributor approves the preview once or personally opts into ongoing auto-upload for that store and repository.
 
 This rule is intentionally scoped to feedback and evaluation; adding it to every answer would add token cost and noisy cases.
 
@@ -38,7 +38,7 @@ The discoverer reads Codex user history and session records; `--path` adds other
 
 ## Share with the maintainer
 
-The intended destination is a private HTTPS intake backed by `bigshuaige1/agent-eval-data`. After its URL is deployed, set `AGENT_EVAL_ENDPOINT=https://HOST/v1/cases` and the contributor's `AGENT_EVAL_UPLOAD_TOKEN` through their environment or secret manager. `capture` and `add` then offer to upload each newly saved case immediately. Contributors do not need GitHub repository access or a GitHub token. To send earlier cases or keep checking hourly:
+The default destination is the private GitHub repository `bigshuaige1/agent-eval-data`. Ask its owner for a collaborator invitation, accept it in GitHub, then run `gh auth login` once or configure your own `GH_TOKEN`/`GITHUB_TOKEN` with access to that repository and Issues write permission. Installing the skill does not grant access. A collaborator on this personal private repository can read and write its contents and see other cases. `capture` and `add` offer to upload each newly saved case immediately. To send earlier cases or keep checking hourly:
 
 ```bash
 python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py publish \
@@ -47,7 +47,7 @@ python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py watch \
   --store ./results/information-priority-eval
 ```
 
-`watch` checks immediately and then every hour while the process runs. Enter uploads only the current batch, `ALWAYS` authorizes future uploads from this local store to this endpoint, and any other input skips. Ongoing consent is saved locally; later checks can upload without a terminal. Successful uploads get local opaque receipts, so later checks only send pending cases. Closing the terminal stops a foreground `watch`; a separately scheduled process is needed for unattended hourly checks. Only short summaries are sent, never the local artifact reference or the full discovery archive. The private intake owner can read uploaded cases.
+`watch` checks immediately and then every hour while the process runs. Enter uploads only the current batch, `ALWAYS` authorizes future uploads from this local store to this repository, and any other input skips. Ongoing consent is saved locally; later checks can upload without a terminal. Successful uploads get local Issue URLs, so later checks only send pending cases. Closing the terminal stops a foreground `watch`; a separately scheduled process is needed for unattended hourly checks. Only short summaries are sent, never the local artifact reference or the full discovery archive.
 
 Check or revoke the setting at any time:
 
@@ -58,6 +58,6 @@ python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py policy \
   --store ./results/information-priority-eval --manual
 ```
 
-An atomic local claim prevents two senders using the same store from posting the same case concurrently. If an upload result is uncertain, that case stays blocked instead of retrying automatically. Ask the intake maintainer to check the case ID; then run `resolve --store STORE --id CASE_ID --receipt RECEIPT` if it exists, or `--not-created` after verifying it does not. Separate local stores cannot coordinate. Without `AGENT_EVAL_ENDPOINT`, capture stays local. Direct public GitHub publishing requires explicit `--repo OWNER/REPO` plus a GitHub CLI login or `GH_TOKEN`/`GITHUB_TOKEN`.
+An atomic local claim prevents two senders using the same store from posting the same case concurrently. If an upload result is uncertain, that case stays blocked instead of retrying automatically. Check the target repository for the case ID; then run `resolve --store STORE --id CASE_ID --issue-url ISSUE_URL` if it exists, or `--not-created` after verifying it does not. Separate local stores cannot coordinate. Without repository access or a GitHub login, capture stays local. Use `--repo OWNER/REPO` or `AGENT_EVAL_REPO` only to target a different repository; the upload preview shows the selected destination.
 
 The tool reports observed labels and a rate for complete, independently reviewed cases. Feedback-only cases are selected by who chose to respond and cannot estimate a population error rate. The Python commands do not call a model API; keep case summaries and command output short to limit agent context use.

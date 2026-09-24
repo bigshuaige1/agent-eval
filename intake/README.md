@@ -1,6 +1,8 @@
-# Cloudflare HTTPS intake
+# Cloudflare HTTPS intake (legacy, not used by the current skill)
 
-`worker.mjs` receives short case summaries at `POST /v1/cases`, checks a contributor token, limits each token to 10 submissions per minute, and creates an Issue in the private `bigshuaige1/agent-eval-data` repository. It returns an opaque receipt. Discovery archives and local artifact paths are excluded by the client and rejected by the receiver.
+The current skill uploads directly to private GitHub Issues after the owner invites each contributor. This Worker remains deployed but is not configured for production uploads. This directory is retained as the source for that existing deployment.
+
+`worker.mjs` receives short case summaries at `POST /v1/cases`, checks a contributor token, limits each token to 10 submissions per minute, and creates an Issue in the private `bigshuaige1/agent-eval-data` repository. It returns an opaque receipt. Discovery archives and local artifact paths are excluded by the former client path and rejected by the receiver.
 
 The Worker is deployed as `agent-eval-intake` on `bigshuaige1-agent-eval.workers.dev`. Its route is enabled, but uploads remain unavailable until both production secrets below are configured and an external request test succeeds. A `GET /healthz` response only checks that the script runs; it does not prove that GitHub delivery works. PjLab's current proxy cannot complete TLS to this `workers.dev` hostname, so test from a contributor network before distributing the URL.
 
@@ -28,6 +30,6 @@ After setting secrets, test from a network outside PjLab:
 3. A synthetic case sent with a valid contributor token returns HTTP 201 and a receipt; confirm the private Issue was created. Do not use a real conversation for this test.
 4. Test that an extra `artifact` field and an oversized body are rejected, and that the case body in the private Issue contains only the intended short summary.
 
-Then contributors set `AGENT_EVAL_ENDPOINT=https://agent-eval-intake.bigshuaige1-agent-eval.workers.dev/v1/cases` and `AGENT_EVAL_UPLOAD_TOKEN` through their environment or secret manager. The local casebook's Enter and `ALWAYS` choices still control upload consent. If a request times out, reconcile by case ID before retrying because the Issue might already exist.
+The current client does not use this endpoint. If the Worker is reactivated later, update and test the client separately before distributing an endpoint.
 
 Only case summaries are sent to Cloudflare and GitHub; they do leave PjLab. Do not add full local discovery archives or raw user-message files to this endpoint.

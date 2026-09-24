@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 import sys
 from types import SimpleNamespace
+from urllib.error import HTTPError
 
 import casebook
 
@@ -150,11 +151,68 @@ class CasebookTest(unittest.TestCase):
             self.assertEqual(casebook.github_token(), "local-token")
             run.assert_called_once()
 
-    def test_publish_requires_explicit_public_destination(self):
-        argv = ["casebook.py", "publish", "--store", "/unused", "--id", "case-1"]
-        with patch.object(sys, "argv", argv), patch.dict("os.environ", {"AGENT_EVAL_ENDPOINT": ""}), \
-             self.assertRaisesRegex(ValueError, "configure AGENT_EVAL_ENDPOINT"):
-            casebook.main()
+    def test_default_destination_is_private_repository(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory)
+            argv = ["casebook.py", "capture", "--store", str(store), "--goal", "Choose plan",
+                    "--finding", "Limit omitted", "--artifact", "/private/raw.txt"]
+
+            class Response:
+                def __enter__(self):
+                    return StringIO('{"html_url":"https://github.com/bigshuaige1/agent-eval-data/issues/1"}')
+
+                def __exit__(self, *_):
+                    return False
+
+            with patch.object(sys, "argv", argv), \
+                 patch.object(casebook.sys, "stdin", SimpleNamespace(isatty=lambda: True)), \
+                 patch("builtins.input", return_value=""), \
+                 patch.dict("os.environ", {"GH_TOKEN": "fake-token"}, clear=True), \
+                 patch.object(casebook.request, "urlopen", return_value=Response()) as send, \
+                 contextlib.redirect_stdout(StringIO()):
+                casebook.main()
+            req = send.call_args.args[0]
+            self.assertEqual(req.full_url, "https://api.github.com/repos/bigshuaige1/agent-eval-data/issues")
+            self.assertNotIn("/private/raw.txt", req.data.decode())
+            self.assertEqual(casebook.pending_cases(store, casebook.DEFAULT_REPO), [])
+
+    def test_capture_without_github_login_stays_local(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory)
+            argv = ["casebook.py", "capture", "--store", str(store), "--goal", "Choose plan",
+                    "--finding", "Limit omitted"]
+            with patch.object(sys, "argv", argv), \
+                 patch.object(casebook.sys, "stdin", SimpleNamespace(isatty=lambda: True)), \
+                 patch.dict("os.environ", {}, clear=True), \
+                 patch.object(casebook.shutil, "which", return_value=None), \
+                 patch.object(casebook.request, "urlopen") as send, \
+                 contextlib.redirect_stdout(StringIO()):
+                casebook.main()
+            send.assert_not_called()
+            self.assertEqual(len(casebook.pending_cases(store, casebook.DEFAULT_REPO)), 1)
+            self.assertEqual(list((store / "sent").rglob("*.claim")), [])
+
+    def test_missing_repository_access_does_not_block_later_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory)
+            case = {"schema_version": 1, "id": "needs-invite", "goal": "Choose plan",
+                    "review_scope": "partial", "requirements": [{"finding": "Limit omitted",
+                    "source": "user_feedback", "importance": "ordinary", "status": "missing",
+                    "stage": "selection"}]}
+            casebook.save(store, case)
+            denied = HTTPError("https://api.github.com/", 404, "Not Found", {}, None)
+            with patch.object(casebook.request, "urlopen", side_effect=denied):
+                with self.assertRaises(HTTPError):
+                    casebook.submit_case(store, casebook.DEFAULT_REPO, case, token="fake-token")
+            self.assertEqual(len(casebook.pending_cases(store, casebook.DEFAULT_REPO)), 1)
+            self.assertFalse(casebook.claim_path(store, casebook.DEFAULT_REPO, case["id"]).exists())
+            case["id"] = "unknown-outcome"
+            casebook.save(store, case)
+            unavailable = HTTPError("https://api.github.com/", 503, "Unavailable", {}, None)
+            with patch.object(casebook.request, "urlopen", side_effect=unavailable):
+                with self.assertRaises(HTTPError):
+                    casebook.submit_case(store, casebook.DEFAULT_REPO, case, token="fake-token")
+            self.assertTrue(casebook.claim_path(store, casebook.DEFAULT_REPO, case["id"]).exists())
 
     def test_always_opt_in_persists_for_noninteractive_sync_and_can_be_revoked(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -228,85 +286,14 @@ class CasebookTest(unittest.TestCase):
             send.assert_not_called()
             self.assertEqual(casebook.policy_mode(store, "example/feedback"), "manual")
 
-    def test_capture_immediately_sends_to_private_intake_after_enter(self):
+    def test_invalid_repository_is_rejected_before_saving(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Path(directory)
-            endpoint = "https://intake.example/v1/cases"
-
-            class Response:
-                def __enter__(self):
-                    return StringIO('{"receipt":"I_private_123"}')
-
-                def __exit__(self, *_):
-                    return False
-
             argv = ["casebook.py", "capture", "--store", str(store), "--goal", "Choose plan",
-                    "--finding", "Limit omitted", "--artifact", "/private/raw.txt",
-                    "--endpoint", endpoint]
-            with patch.object(sys, "argv", argv), \
-                 patch.object(casebook.sys, "stdin", SimpleNamespace(isatty=lambda: True)), \
-                 patch("builtins.input", return_value=""), \
-                 patch.dict("os.environ", {"AGENT_EVAL_UPLOAD_TOKEN": "test-only-token"}), \
-                 patch.object(casebook.request, "urlopen", return_value=Response()) as send, \
-                 contextlib.redirect_stdout(StringIO()):
+                    "--finding", "Limit omitted", "--repo", "../escape"]
+            with patch.object(sys, "argv", argv), self.assertRaisesRegex(ValueError, "OWNER/REPO"):
                 casebook.main()
-            req = send.call_args.args[0]
-            self.assertEqual(req.full_url, endpoint)
-            self.assertEqual(req.get_header("Authorization"), "Bearer test-only-token")
-            self.assertNotIn("/private/raw.txt", req.data.decode())
-            self.assertEqual(casebook.pending_cases(store, endpoint), [])
-            receipt = next((store / "sent").rglob("*.json"))
-            self.assertIn("I_private_123", receipt.read_text())
-            casebook.set_policy(store, endpoint, "auto")
-            with patch.object(sys, "argv", argv), \
-                 patch.object(casebook.sys, "stdin", SimpleNamespace(isatty=lambda: False)), \
-                 patch("builtins.input", side_effect=AssertionError("unexpected prompt")), \
-                 patch.dict("os.environ", {"AGENT_EVAL_UPLOAD_TOKEN": "test-only-token"}), \
-                 patch.object(casebook.request, "urlopen", return_value=Response()) as send, \
-                 contextlib.redirect_stdout(StringIO()):
-                casebook.main()
-            send.assert_called_once()
-            self.assertEqual(len(list((store / "sent").rglob("*.json"))), 2)
-
-    def test_missing_upload_token_keeps_new_case_pending_without_claim(self):
-        with tempfile.TemporaryDirectory() as directory:
-            store = Path(directory)
-            endpoint = "https://intake.example/v1/cases"
-            argv = ["casebook.py", "capture", "--store", str(store), "--goal", "Choose plan",
-                    "--finding", "Limit omitted", "--endpoint", endpoint]
-            with patch.object(sys, "argv", argv), \
-                 patch.object(casebook.sys, "stdin", SimpleNamespace(isatty=lambda: True)), \
-                 patch("builtins.input", return_value=""), \
-                 patch.dict("os.environ", {"AGENT_EVAL_UPLOAD_TOKEN": ""}), \
-                 patch.object(casebook.request, "urlopen") as send, \
-                 contextlib.redirect_stdout(StringIO()), \
-                 self.assertRaisesRegex(ValueError, "AGENT_EVAL_UPLOAD_TOKEN"):
-                casebook.main()
-            send.assert_not_called()
-            self.assertEqual(len(list((store / "cases").glob("*.json"))), 1)
-            self.assertEqual(list((store / "sent").rglob("*.claim")), [])
-
-    def test_oversize_private_case_is_rejected_before_claim(self):
-        with tempfile.TemporaryDirectory() as directory:
-            store = Path(directory)
-            endpoint = "https://intake.example/v1/cases"
-            case = {"schema_version": 1, "id": "large-1", "goal": "x" * 7000,
-                    "review_scope": "partial", "requirements": [{"finding": "Limit omitted",
-                    "source": "user_feedback", "importance": "ordinary", "status": "missing",
-                    "stage": "selection"}]}
-            casebook.save(store, case)
-            with patch.dict("os.environ", {"AGENT_EVAL_UPLOAD_TOKEN": "test-only-token"}), \
-                 patch.object(casebook.request, "urlopen") as send, \
-                 self.assertRaisesRegex(ValueError, "exceeds"):
-                casebook.submit_to_intake(store, endpoint, case)
-            send.assert_not_called()
-            self.assertFalse(casebook.claim_path(store, endpoint, "large-1").exists())
-
-    def test_invalid_private_endpoint_is_rejected(self):
-        for endpoint in ("http://intake.example/v1/cases", "https://bad.example/x",
-                         "https://user:pass@bad.example/v1/cases"):
-            with self.assertRaises(ValueError):
-                casebook.intake_endpoint(endpoint)
+            self.assertFalse((store / "cases").exists())
 
 
 if __name__ == "__main__":

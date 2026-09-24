@@ -16,11 +16,11 @@ To inspect existing local Codex history and sessions for possible missed priorit
 
 ## Share cases
 
-The private receiving repository is `bigshuaige1/agent-eval-data`. Its [Cloudflare HTTPS intake](intake/README.md) keeps the GitHub write credential on the server. The Worker route exists but production secrets and an external request test are still required before distributing it. Once the maintainer confirms it is ready, contributors configure `AGENT_EVAL_ENDPOINT=https://agent-eval-intake.bigshuaige1-agent-eval.workers.dev/v1/cases` and their own `AGENT_EVAL_UPLOAD_TOKEN`. Each `capture` or `add` then offers to upload its short case immediately; Enter approves once, or `ALWAYS` enables future automatic uploads for that store and endpoint. Contributors need no GitHub repository access. To send previously collected cases or check hourly in a running terminal:
+The default destination is the private repository `bigshuaige1/agent-eval-data`. The owner invites each contributor once; the contributor accepts the invitation and signs in with `gh auth login` or their own GitHub token with repository access and Issues write permission. Installing the skill does not grant access. Personal private repository collaborators can see and write repository content, including other cases. Each `capture` or `add` offers to upload its short case immediately; Enter approves once, or `ALWAYS` enables future automatic uploads for that store and repository. To send previously collected cases or check hourly in a running terminal:
 
 ```bash
 python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py watch \
   --store ./results/information-priority-eval
 ```
 
-`watch` checks immediately and every hour while running. Revoke ongoing consent with `python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py policy --store ./results/information-priority-eval --manual`. Closing the terminal stops `watch`; unattended hourly checks require a separate scheduler. Only short case summaries go to the private intake. Discovery files and local artifact references stay local. Until the intake URL is configured, collection stays local. Public GitHub publishing requires an explicit `--repo OWNER/REPO` and a GitHub login.
+`watch` checks immediately and every hour while running. Revoke ongoing consent with `python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py policy --store ./results/information-priority-eval --manual`. Closing the terminal stops `watch`; unattended hourly checks require a separate scheduler. Only short case summaries go to GitHub Issues. Discovery files and local artifact references stay local. Without repository access or login, collection stays local.
