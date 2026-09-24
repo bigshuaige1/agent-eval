@@ -246,11 +246,13 @@ class CasebookTest(unittest.TestCase):
             with patch.object(sys, "argv", argv), \
                  patch.object(casebook.sys, "stdin", SimpleNamespace(isatty=lambda: True)), \
                  patch("builtins.input", return_value=""), \
+                 patch.dict("os.environ", {"AGENT_EVAL_UPLOAD_TOKEN": "test-only-token"}), \
                  patch.object(casebook.request, "urlopen", return_value=Response()) as send, \
                  contextlib.redirect_stdout(StringIO()):
                 casebook.main()
             req = send.call_args.args[0]
             self.assertEqual(req.full_url, endpoint)
+            self.assertEqual(req.get_header("Authorization"), "Bearer test-only-token")
             self.assertNotIn("/private/raw.txt", req.data.decode())
             self.assertEqual(casebook.pending_cases(store, endpoint), [])
             receipt = next((store / "sent").rglob("*.json"))
@@ -259,11 +261,46 @@ class CasebookTest(unittest.TestCase):
             with patch.object(sys, "argv", argv), \
                  patch.object(casebook.sys, "stdin", SimpleNamespace(isatty=lambda: False)), \
                  patch("builtins.input", side_effect=AssertionError("unexpected prompt")), \
+                 patch.dict("os.environ", {"AGENT_EVAL_UPLOAD_TOKEN": "test-only-token"}), \
                  patch.object(casebook.request, "urlopen", return_value=Response()) as send, \
                  contextlib.redirect_stdout(StringIO()):
                 casebook.main()
             send.assert_called_once()
             self.assertEqual(len(list((store / "sent").rglob("*.json"))), 2)
+
+    def test_missing_upload_token_keeps_new_case_pending_without_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory)
+            endpoint = "https://intake.example/v1/cases"
+            argv = ["casebook.py", "capture", "--store", str(store), "--goal", "Choose plan",
+                    "--finding", "Limit omitted", "--endpoint", endpoint]
+            with patch.object(sys, "argv", argv), \
+                 patch.object(casebook.sys, "stdin", SimpleNamespace(isatty=lambda: True)), \
+                 patch("builtins.input", return_value=""), \
+                 patch.dict("os.environ", {"AGENT_EVAL_UPLOAD_TOKEN": ""}), \
+                 patch.object(casebook.request, "urlopen") as send, \
+                 contextlib.redirect_stdout(StringIO()), \
+                 self.assertRaisesRegex(ValueError, "AGENT_EVAL_UPLOAD_TOKEN"):
+                casebook.main()
+            send.assert_not_called()
+            self.assertEqual(len(list((store / "cases").glob("*.json"))), 1)
+            self.assertEqual(list((store / "sent").rglob("*.claim")), [])
+
+    def test_oversize_private_case_is_rejected_before_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory)
+            endpoint = "https://intake.example/v1/cases"
+            case = {"schema_version": 1, "id": "large-1", "goal": "x" * 7000,
+                    "review_scope": "partial", "requirements": [{"finding": "Limit omitted",
+                    "source": "user_feedback", "importance": "ordinary", "status": "missing",
+                    "stage": "selection"}]}
+            casebook.save(store, case)
+            with patch.dict("os.environ", {"AGENT_EVAL_UPLOAD_TOKEN": "test-only-token"}), \
+                 patch.object(casebook.request, "urlopen") as send, \
+                 self.assertRaisesRegex(ValueError, "exceeds"):
+                casebook.submit_to_intake(store, endpoint, case)
+            send.assert_not_called()
+            self.assertFalse(casebook.claim_path(store, endpoint, "large-1").exists())
 
     def test_invalid_private_endpoint_is_rejected(self):
         for endpoint in ("http://intake.example/v1/cases", "https://bad.example/x",

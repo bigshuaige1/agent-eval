@@ -174,14 +174,21 @@ def intake_endpoint(value):
 
 
 def submit_to_intake(store, endpoint, case):
+    upload_token = os.getenv("AGENT_EVAL_UPLOAD_TOKEN")
+    if not upload_token:
+        raise ValueError("AGENT_EVAL_UPLOAD_TOKEN is required for private intake")
+    body = issue_body(case)
+    payload = json.dumps({"id": case["id"], "title": f"[priority-eval] {case['id']}",
+                          "body": body}).encode()
+    if len(body) > 6000 or len(payload) > 8192:
+        raise ValueError("case summary exceeds the private intake limit")
     claim = claim_path(store, endpoint, case["id"])
     claim.parent.mkdir(parents=True, exist_ok=True)
     with claim.open("x", encoding="utf-8") as output:
         output.write("Submission started; ask the intake maintainer to reconcile before retrying.\n")
-    payload = json.dumps({"id": case["id"], "title": f"[priority-eval] {case['id']}",
-                          "body": issue_body(case)}).encode()
     req = request.Request(endpoint, data=payload,
                           headers={"Content-Type": "application/json",
+                                   "Authorization": f"Bearer {upload_token}",
                                    "User-Agent": "information-priority-eval"}, method="POST")
     with request.urlopen(req, timeout=20) as response:
         receipt = json.load(response)["receipt"]

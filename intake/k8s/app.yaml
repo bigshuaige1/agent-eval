@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-eval-intake
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-eval-intake
+  template:
+    metadata:
+      labels:
+        app: agent-eval-intake
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: intake
+          image: registry.example.invalid/agent-eval-intake:replace-me
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: agent-eval-intake
+                  key: github-token
+            - name: UPLOAD_TOKEN_HASHES
+              valueFrom:
+                secretKeyRef:
+                  name: agent-eval-intake
+                  key: upload-token-hashes
+            - name: HTTPS_PROXY
+              value: http://httpproxy-headless.kubebrain.svc.pjlab.local:3128
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop: [ALL]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-eval-intake
+spec:
+  type: ClusterIP
+  selector:
+    app: agent-eval-intake
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-eval-intake
+spec:
+  tls:
+    - hosts: [intake.example.invalid]
+      secretName: agent-eval-intake-tls
+  rules:
+    - host: intake.example.invalid
+      http:
+        paths:
+          - path: /v1/cases
+            pathType: Exact
+            backend:
+              service:
+                name: agent-eval-intake
+                port:
+                  name: http

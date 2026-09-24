@@ -16,7 +16,7 @@ To inspect existing local Codex history and sessions for possible missed priorit
 
 ## Share cases
 
-The private receiving repository is `bigshuaige1/agent-eval-data`. Its [HTTPS intake](intake/README.md) keeps the GitHub write credential on the server. Once the maintainer publishes the intake URL, configure `AGENT_EVAL_ENDPOINT=https://HOST/v1/cases`. Each `capture` or `add` then offers to upload its short case immediately; Enter approves once, or `ALWAYS` enables future automatic uploads for that store and endpoint. No contributor GitHub token is needed. To send previously collected cases or check hourly in a running terminal:
+The private receiving repository is `bigshuaige1/agent-eval-data`. Its [PjLab HTTPS intake](intake/README.md) keeps the GitHub write credential on the server. Once the maintainer publishes an externally reachable URL, contributors configure `AGENT_EVAL_ENDPOINT=https://HOST/v1/cases` and their own `AGENT_EVAL_UPLOAD_TOKEN`. Each `capture` or `add` then offers to upload its short case immediately; Enter approves once, or `ALWAYS` enables future automatic uploads for that store and endpoint. Contributors need no GitHub repository access. To send previously collected cases or check hourly in a running terminal:
 
 ```bash
 python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py watch \

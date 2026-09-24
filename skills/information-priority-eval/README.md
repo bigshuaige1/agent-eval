@@ -38,7 +38,7 @@ The discoverer reads Codex user history and session records; `--path` adds other
 
 ## Share with the maintainer
 
-The intended destination is a private HTTPS intake backed by `bigshuaige1/agent-eval-data`. After its URL is deployed, set `AGENT_EVAL_ENDPOINT=https://HOST/v1/cases` in the contributor's environment. `capture` and `add` then offer to upload each newly saved case immediately. Contributors do not need GitHub repository access or a GitHub token. To send earlier cases or keep checking hourly:
+The intended destination is a private HTTPS intake backed by `bigshuaige1/agent-eval-data`. After its URL is deployed, set `AGENT_EVAL_ENDPOINT=https://HOST/v1/cases` and the contributor's `AGENT_EVAL_UPLOAD_TOKEN` through their environment or secret manager. `capture` and `add` then offer to upload each newly saved case immediately. Contributors do not need GitHub repository access or a GitHub token. To send earlier cases or keep checking hourly:
 
 ```bash
 python3 ~/.codex/skills/information-priority-eval/scripts/casebook.py publish \
