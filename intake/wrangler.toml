@@ -1,9 +1,0 @@
-name = "agent-eval-intake"
-main = "worker.mjs"
-compatibility_date = "2026-09-24"
-workers_dev = true
-
-[[ratelimits]]
-name = "RATE_LIMITER"
-namespace_id = "1001"
-simple = { limit = 10, period = 60 }
