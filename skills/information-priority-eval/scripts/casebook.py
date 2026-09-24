@@ -14,14 +14,15 @@ import sys
 import tempfile
 import time
 from urllib import error, request
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 
 STAGES = {"goal", "retrieval", "selection", "generation", "presentation", "unknown"}
 SOURCES = {"user_feedback", "independent_review", "agent_hypothesis"}
 STATUSES = {"covered", "partial", "missing", "contradicted", "unknown"}
-DEFAULT_REPO = "bigshuaige1/agent-eval"
 ID_PATTERN = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}\Z")
+RECEIPT_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,200}={0,2}\Z")
 REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
 
@@ -164,6 +165,33 @@ def github_token():
     return None
 
 
+def intake_endpoint(value):
+    parsed = urlsplit(value)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or
+            parsed.query or parsed.fragment or parsed.path.rstrip("/") != "/v1/cases"):
+        raise ValueError("endpoint must be an HTTPS URL ending in /v1/cases")
+    return value.rstrip("/")
+
+
+def submit_to_intake(store, endpoint, case):
+    claim = claim_path(store, endpoint, case["id"])
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    with claim.open("x", encoding="utf-8") as output:
+        output.write("Submission started; ask the intake maintainer to reconcile before retrying.\n")
+    payload = json.dumps({"id": case["id"], "title": f"[priority-eval] {case['id']}",
+                          "body": issue_body(case)}).encode()
+    req = request.Request(endpoint, data=payload,
+                          headers={"Content-Type": "application/json",
+                                   "User-Agent": "information-priority-eval"}, method="POST")
+    with request.urlopen(req, timeout=20) as response:
+        receipt = json.load(response)["receipt"]
+    if not isinstance(receipt, str) or not RECEIPT_PATTERN.fullmatch(receipt):
+        raise ValueError("intake returned an invalid receipt; submission is unresolved")
+    write_receipt(store, endpoint, case["id"], receipt)
+    claim.unlink()
+    print(f"Private intake receipt: {receipt}")
+
+
 def submit_case(store, repo, case, token=None):
     token = token or github_token()
     if not token:
@@ -186,45 +214,49 @@ def submit_case(store, repo, case, token=None):
     print(url)
 
 
-def review_and_sync(store, repo, selected=None, max_batch=10):
-    cases = pending_cases(store, repo)
+def review_and_sync(store, repo, selected=None, max_batch=10, endpoint=None):
+    destination = endpoint or repo
+    cases = pending_cases(store, destination)
     if selected is not None:
         cases = [case for case in cases if case["id"] == selected]
     cases = cases[:max_batch]
     if not cases:
         print("No pending cases.")
-        claims = list(receipt_path(store, repo, "unused").parent.glob("*.claim"))
+        claims = list(receipt_path(store, destination, "unused").parent.glob("*.claim"))
         if claims:
-            print(f"Unresolved submissions: {len(claims)}. Inspect GitHub, then use resolve.")
+            print(f"Unresolved submissions: {len(claims)}. Reconcile with the destination, then use resolve.")
         return
-    auto = policy_mode(store, repo) == "auto"
+    auto = policy_mode(store, destination) == "auto"
     if auto:
-        print(f"Auto-upload enabled for this store and {repo}; pending: {len(cases)}.")
+        print(f"Auto-upload enabled for this store and {destination}; pending: {len(cases)}.")
     else:
         for case in cases:
             print(issue_body(case))
-        print(f"Pending: {len(cases)}. These summaries will become GitHub Issues in {repo}.")
+        print(f"Pending: {len(cases)}. These summaries will be sent to {destination}.")
         if not sys.stdin.isatty():
             print("No interactive terminal and no auto-upload consent; nothing uploaded.")
             return
-    token = github_token()
-    if not token:
+    token = None if endpoint else github_token()
+    if not endpoint and not token:
         print("No GitHub login found; use GH_TOKEN/GITHUB_TOKEN or gh auth login.")
         return
     if not auto:
-        choice = input(f"Enter = upload once; ALWAYS = auto-upload future cases to {repo} without review; other text = skip: ")
+        choice = input(f"Enter = upload once; ALWAYS = auto-upload future cases to {destination} without review; other text = skip: ")
         if choice == "ALWAYS":
-            set_policy(store, repo, "auto")
+            set_policy(store, destination, "auto")
             auto = True
-            print("Auto-upload enabled for this store and repository. Use policy --manual to revoke.")
+            print("Auto-upload enabled for this store and destination. Use policy --manual to revoke.")
         elif choice != "":
             print("Skipped; cases remain pending.")
             return
     for case in cases:
-        if auto and policy_mode(store, repo) != "auto":
+        if auto and policy_mode(store, destination) != "auto":
             print("Auto-upload revoked; remaining cases are pending.")
             break
-        submit_case(store, repo, case, token=token)
+        if endpoint:
+            submit_to_intake(store, endpoint, case)
+        else:
+            submit_case(store, repo, case, token=token)
 
 
 def report(store):
@@ -262,16 +294,18 @@ def main():
     capture.add_argument("--importance", choices=["critical", "ordinary"], default="ordinary")
     capture.add_argument("--status", choices=sorted(STATUSES), default="missing")
     capture.add_argument("--artifact", default="")
+    capture.add_argument("--endpoint", default=os.getenv("AGENT_EVAL_ENDPOINT"))
     add = sub.add_parser("add")
     add.add_argument("--store", type=Path, required=True)
     add.add_argument("--input", type=Path, required=True)
+    add.add_argument("--endpoint", default=os.getenv("AGENT_EVAL_ENDPOINT"))
     summary = sub.add_parser("report")
     summary.add_argument("--store", type=Path, required=True)
     for name in ("publish", "sync", "watch", "resolve", "policy"):
         command = sub.add_parser(name)
         command.add_argument("--store", type=Path, required=True)
-        command.add_argument("--repo", default=DEFAULT_REPO,
-                             help=f"GitHub repository (default: {DEFAULT_REPO})")
+        command.add_argument("--repo", help="explicit public GitHub Issues destination")
+        command.add_argument("--endpoint", help="private HTTPS intake; selected unless --repo is explicit")
         if name in {"publish", "resolve"}:
             command.add_argument("--id", required=True)
         if name in {"sync", "watch"}:
@@ -282,6 +316,7 @@ def main():
         if name == "resolve":
             outcome = command.add_mutually_exclusive_group(required=True)
             outcome.add_argument("--issue-url")
+            outcome.add_argument("--receipt")
             outcome.add_argument("--not-created", action="store_true")
         if name == "policy":
             command.add_argument("--manual", action="store_true",
@@ -296,35 +331,57 @@ def main():
                                             "status": "missing", "stage": "selection",
                                             "impact": "Consequence of omission"}]}, ensure_ascii=False, indent=2))
     elif args.command == "capture":
+        endpoint = intake_endpoint(args.endpoint) if args.endpoint else None
         case = {"schema_version": 1, "id": "case-" + uuid4().hex[:12], "goal": args.goal,
                 "review_scope": "partial", "artifact": args.artifact,
                 "requirements": [{"finding": args.finding, "source": "user_feedback",
                                   "importance": args.importance, "status": args.status,
                                   "stage": args.stage, "impact": args.impact}]}
         print(save(args.store, case))
+        if endpoint:
+            review_and_sync(args.store, None, selected=case["id"], max_batch=1,
+                            endpoint=endpoint)
     elif args.command == "add":
-        print(save(args.store, json.loads(args.input.read_text(encoding="utf-8"))))
+        endpoint = intake_endpoint(args.endpoint) if args.endpoint else None
+        case = json.loads(args.input.read_text(encoding="utf-8"))
+        print(save(args.store, case))
+        if endpoint:
+            review_and_sync(args.store, None, selected=case["id"], max_batch=1,
+                            endpoint=endpoint)
     elif args.command == "report":
         report(args.store)
     elif args.command in {"publish", "sync", "watch", "resolve", "policy"}:
-        if not REPO_PATTERN.fullmatch(args.repo) or ".." in args.repo:
+        chosen_endpoint = args.endpoint or (None if args.repo else os.getenv("AGENT_EVAL_ENDPOINT"))
+        endpoint = intake_endpoint(chosen_endpoint) if chosen_endpoint else None
+        if not endpoint and not args.repo:
+            raise ValueError("configure AGENT_EVAL_ENDPOINT or explicitly pass --repo")
+        destination = endpoint or args.repo
+        if args.repo and (not REPO_PATTERN.fullmatch(args.repo) or ".." in args.repo):
             raise ValueError("repo must be OWNER/REPO")
         if args.command in {"publish", "resolve"} and not ID_PATTERN.fullmatch(args.id):
             raise ValueError("invalid case id")
         if args.command == "policy":
             if args.manual:
-                set_policy(args.store, args.repo, "manual")
-            print(f"Upload policy for {args.repo}: {policy_mode(args.store, args.repo)}")
+                set_policy(args.store, destination, "manual")
+            print(f"Upload policy for {destination}: {policy_mode(args.store, destination)}")
             return
         if args.command == "resolve":
-            claim = claim_path(args.store, args.repo, args.id)
+            claim = claim_path(args.store, destination, args.id)
             if not claim.exists():
                 raise ValueError("no unresolved submission for this case")
-            if args.issue_url:
+            if args.receipt:
+                if not endpoint or not RECEIPT_PATTERN.fullmatch(args.receipt):
+                    raise ValueError("receipt requires a private endpoint and a valid value")
+                write_receipt(args.store, destination, args.id, args.receipt)
+                claim.unlink()
+                print("Marked as sent.")
+            elif args.issue_url:
+                if endpoint:
+                    raise ValueError("use --receipt for a private endpoint")
                 expected = f"https://github.com/{args.repo}/issues/"
                 if not args.issue_url.startswith(expected) or not args.issue_url[len(expected):].isdigit():
                     raise ValueError("issue-url must be an Issue in the selected repository")
-                write_receipt(args.store, args.repo, args.id, args.issue_url)
+                write_receipt(args.store, destination, args.id, args.issue_url)
                 claim.unlink()
                 print("Marked as sent.")
             else:
@@ -336,15 +393,27 @@ def main():
         if args.command != "publish" and args.max_batch < 1:
             raise ValueError("max-batch must be at least 1")
         if args.command == "publish":
-            review_and_sync(args.store, args.repo, selected=args.id, max_batch=1)
+            if endpoint:
+                review_and_sync(args.store, args.repo, selected=args.id, max_batch=1,
+                                endpoint=endpoint)
+            else:
+                review_and_sync(args.store, args.repo, selected=args.id, max_batch=1)
         elif args.command == "sync":
-            review_and_sync(args.store, args.repo, max_batch=args.max_batch)
+            if endpoint:
+                review_and_sync(args.store, args.repo, max_batch=args.max_batch,
+                                endpoint=endpoint)
+            else:
+                review_and_sync(args.store, args.repo, max_batch=args.max_batch)
         else:
-            if not sys.stdin.isatty() and policy_mode(args.store, args.repo) != "auto":
+            if not sys.stdin.isatty() and policy_mode(args.store, destination) != "auto":
                 raise ValueError("watch requires a terminal until auto-upload is enabled")
             print(f"Watching every {args.every_minutes} minutes; Ctrl-C stops it.")
             while True:
-                review_and_sync(args.store, args.repo, max_batch=args.max_batch)
+                if endpoint:
+                    review_and_sync(args.store, args.repo, max_batch=args.max_batch,
+                                    endpoint=endpoint)
+                else:
+                    review_and_sync(args.store, args.repo, max_batch=args.max_batch)
                 time.sleep(args.every_minutes * 60)
 
 

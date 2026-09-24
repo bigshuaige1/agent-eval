@@ -150,12 +150,11 @@ class CasebookTest(unittest.TestCase):
             self.assertEqual(casebook.github_token(), "local-token")
             run.assert_called_once()
 
-    def test_publish_defaults_to_maintainer_repository(self):
+    def test_publish_requires_explicit_public_destination(self):
         argv = ["casebook.py", "publish", "--store", "/unused", "--id", "case-1"]
-        with patch.object(sys, "argv", argv), patch.object(casebook, "review_and_sync") as review:
+        with patch.object(sys, "argv", argv), patch.dict("os.environ", {"AGENT_EVAL_ENDPOINT": ""}), \
+             self.assertRaisesRegex(ValueError, "configure AGENT_EVAL_ENDPOINT"):
             casebook.main()
-        review.assert_called_once_with(Path("/unused"), "bigshuaige1/agent-eval",
-                                       selected="case-1", max_batch=1)
 
     def test_always_opt_in_persists_for_noninteractive_sync_and_can_be_revoked(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -228,6 +227,49 @@ class CasebookTest(unittest.TestCase):
                 casebook.review_and_sync(store, "example/feedback")
             send.assert_not_called()
             self.assertEqual(casebook.policy_mode(store, "example/feedback"), "manual")
+
+    def test_capture_immediately_sends_to_private_intake_after_enter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory)
+            endpoint = "https://intake.example/v1/cases"
+
+            class Response:
+                def __enter__(self):
+                    return StringIO('{"receipt":"I_private_123"}')
+
+                def __exit__(self, *_):
+                    return False
+
+            argv = ["casebook.py", "capture", "--store", str(store), "--goal", "Choose plan",
+                    "--finding", "Limit omitted", "--artifact", "/private/raw.txt",
+                    "--endpoint", endpoint]
+            with patch.object(sys, "argv", argv), \
+                 patch.object(casebook.sys, "stdin", SimpleNamespace(isatty=lambda: True)), \
+                 patch("builtins.input", return_value=""), \
+                 patch.object(casebook.request, "urlopen", return_value=Response()) as send, \
+                 contextlib.redirect_stdout(StringIO()):
+                casebook.main()
+            req = send.call_args.args[0]
+            self.assertEqual(req.full_url, endpoint)
+            self.assertNotIn("/private/raw.txt", req.data.decode())
+            self.assertEqual(casebook.pending_cases(store, endpoint), [])
+            receipt = next((store / "sent").rglob("*.json"))
+            self.assertIn("I_private_123", receipt.read_text())
+            casebook.set_policy(store, endpoint, "auto")
+            with patch.object(sys, "argv", argv), \
+                 patch.object(casebook.sys, "stdin", SimpleNamespace(isatty=lambda: False)), \
+                 patch("builtins.input", side_effect=AssertionError("unexpected prompt")), \
+                 patch.object(casebook.request, "urlopen", return_value=Response()) as send, \
+                 contextlib.redirect_stdout(StringIO()):
+                casebook.main()
+            send.assert_called_once()
+            self.assertEqual(len(list((store / "sent").rglob("*.json"))), 2)
+
+    def test_invalid_private_endpoint_is_rejected(self):
+        for endpoint in ("http://intake.example/v1/cases", "https://bad.example/x",
+                         "https://user:pass@bad.example/v1/cases"):
+            with self.assertRaises(ValueError):
+                casebook.intake_endpoint(endpoint)
 
 
 if __name__ == "__main__":
